@@ -1,0 +1,507 @@
+{
+  "name": "HVAC AI Lead Qualification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "website-form",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "form-webhook",
+      "name": "Website Form Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "form-submission"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "name",
+              "name": "name",
+              "value": "={{ $json.body.name || $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "email",
+              "name": "email",
+              "value": "={{ $json.body.email || $json.email }}",
+              "type": "string"
+            },
+            {
+              "id": "phone",
+              "name": "phone",
+              "value": "={{ $json.body.phone || $json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "value": "={{ $json.body.message || $json.message }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-form-data",
+      "name": "Extract Form Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "model": "gpt-4",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert HVAC lead classifier. Analyze the customer message and classify it into ONE category: Emergency, Installation, Maintenance, or General. Output ONLY the category name and a brief reason.\n\nEmergency: No heat/AC, water leak, gas smell, system failure\nInstallation: New system, replacement, upgrade\nMaintenance: Tune-up, filter change, inspection, preventive\nGeneral: Questions, quotes, information"
+            },
+            {
+              "role": "user",
+              "content": "=Customer Name: {{ $json.name }}\nPhone: {{ $json.phone }}\nEmail: {{ $json.email }}\nMessage: {{ $json.message }}\n\nClassify this lead."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "openai-classify",
+      "name": "Classify with AI",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.item.json.choices[0].message.content;\nconst category = response.toLowerCase().includes('emergency') ? 'Emergency' :\n                 response.toLowerCase().includes('installation') ? 'Installation' :\n                 response.toLowerCase().includes('maintenance') ? 'Maintenance' : 'General';\n\nreturn {\n  ...items[0].json,\n  category: category,\n  aiResponse: response,\n  name: $('Extract Form Data').item.json.name,\n  email: $('Extract Form Data').item.json.email,\n  phone: $('Extract Form Data').item.json.phone,\n  message: $('Extract Form Data').item.json.message,\n  timestamp: $('Extract Form Data').item.json.timestamp\n};"
+      },
+      "id": "parse-category",
+      "name": "Parse Category",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.category }}",
+              "operation": "equals",
+              "value2": "Emergency"
+            }
+          ]
+        }
+      },
+      "id": "route-by-category",
+      "name": "Route by Category",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "+15555551234",
+        "message": "🚨 EMERGENCY LEAD: {{ $json.name }} - {{ $json.phone }}. Issue: {{ $json.message }}",
+        "options": {}
+      },
+      "id": "emergency-sms",
+      "name": "Alert Technician SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [1300, 100],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "emergency@hvaccompany.com",
+        "toEmail": "oncall@hvaccompany.com",
+        "subject": "🚨 EMERGENCY: {{ $json.name }}",
+        "emailType": "html",
+        "message": "<h2 style='color: red;'>EMERGENCY HVAC CALL</h2><p><strong>Customer:</strong> {{ $json.name }}</p><p><strong>Phone:</strong> {{ $json.phone }}</p><p><strong>Email:</strong> {{ $json.email }}</p><p><strong>Issue:</strong> {{ $json.message }}</p><p><strong>AI Classification:</strong> {{ $json.aiResponse }}</p><p><strong>Time:</strong> {{ $json.timestamp }}</p>",
+        "options": {}
+      },
+      "id": "emergency-email",
+      "name": "Email On-Call Tech",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1500, 100],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "sales@hvaccompany.com",
+        "toEmail": "={{ $json.email }}",
+        "subject": "Your Free HVAC Installation Estimate",
+        "emailType": "html",
+        "message": "<h2>Hi {{ $json.name }},</h2><p>Thank you for your interest in a new HVAC system installation!</p><p>We'd love to provide you with a <strong>free, no-obligation estimate</strong> for your project.</p><p>Our expert team will:</p><ul><li>Assess your home's specific needs</li><li>Recommend the best energy-efficient systems</li><li>Provide transparent pricing</li><li>Explain financing options</li></ul><p><strong>Next Steps:</strong><br>We'll contact you within 24 hours at {{ $json.phone }} to schedule your free consultation.</p><p>Questions? Reply to this email or call us at (555) 123-4567.</p><p>Best regards,<br>HVAC Company Sales Team</p>",
+        "options": {}
+      },
+      "id": "installation-email",
+      "name": "Send Installation Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1300, 250],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://your-crm-api.com/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "={{ $json.name }}"
+            },
+            {
+              "name": "email",
+              "value": "={{ $json.email }}"
+            },
+            {
+              "name": "phone",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "category",
+              "value": "={{ $json.category }}"
+            },
+            {
+              "name": "tags",
+              "value": "Maintenance Lead"
+            },
+            {
+              "name": "source",
+              "value": "Website Form"
+            },
+            {
+              "name": "notes",
+              "value": "={{ $json.message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "maintenance-crm",
+      "name": "Add to CRM - Maintenance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1300, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "crm-api-key",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://your-crm-api.com/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "={{ $json.name }}"
+            },
+            {
+              "name": "email",
+              "value": "={{ $json.email }}"
+            },
+            {
+              "name": "phone",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "category",
+              "value": "General"
+            },
+            {
+              "name": "tags",
+              "value": "Low Priority"
+            },
+            {
+              "name": "source",
+              "value": "Website Form"
+            },
+            {
+              "name": "notes",
+              "value": "={{ $json.message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "general-crm",
+      "name": "Add to CRM - General",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1300, 550],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "crm-api-key",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "your-google-sheet-id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.timestamp }}",
+            "Name": "={{ $json.name }}",
+            "Email": "={{ $json.email }}",
+            "Phone": "={{ $json.phone }}",
+            "Message": "={{ $json.message }}",
+            "Category": "={{ $json.category }}",
+            "AI_Classification": "={{ $json.aiResponse }}",
+            "Action_Taken": "={{ $json.category === 'Emergency' ? 'Alerted On-Call Tech' : $json.category === 'Installation' ? 'Sent Estimate Email' : 'Added to CRM' }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "log-all-leads",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1700, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## AI Lead Qualification System\n\nAutomatically classifies and routes website form submissions using AI.\n\n**Configuration Required:**\n1. OpenAI API key\n2. Update Twilio credentials & on-call tech phone\n3. Update email addresses\n4. Configure CRM API endpoint & credentials\n5. Update Google Sheets document ID\n6. Configure webhook in website form",
+        "height": 380,
+        "width": 400
+      },
+      "id": "note-2",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 80]
+    }
+  ],
+  "connections": {
+    "Website Form Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Form Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Form Data": {
+      "main": [
+        [
+          {
+            "node": "Classify with AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify with AI": {
+      "main": [
+        [
+          {
+            "node": "Parse Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Category": {
+      "main": [
+        [
+          {
+            "node": "Route by Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Category": {
+      "main": [
+        [
+          {
+            "node": "Alert Technician SMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Installation Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Add to CRM - Maintenance",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Add to CRM - General",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Technician SMS": {
+      "main": [
+        [
+          {
+            "node": "Email On-Call Tech",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email On-Call Tech": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Installation Email": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to CRM - Maintenance": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to CRM - General": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-01-29T15:30:00.000Z",
+  "versionId": "1"
+}
