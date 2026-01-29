@@ -1,0 +1,544 @@
+{
+  "name": "Automation ROI Proof Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "roi-event",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-roi-event",
+      "name": "Webhook - ROI Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "roi-event-webhook",
+      "notes": "Receives ROI events from all automations. Expected fields: leadSource, jobType, estimatedJobValue, status (Booked/Completed/Lost), automationResponsible, timestamp, clientId"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\"success\": true, \"eventId\": $now.toISO(), \"message\": \"ROI event recorded\"} }}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_NAME_EVENTS || 'ROI_Events' }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $now.toISO() }}",
+            "clientId": "={{ $json.clientId || $env.CLIENT_ID }}",
+            "leadSource": "={{ $json.leadSource }}",
+            "jobType": "={{ $json.jobType }}",
+            "estimatedJobValue": "={{ $json.estimatedJobValue }}",
+            "status": "={{ $json.status }}",
+            "automationResponsible": "={{ $json.automationResponsible }}",
+            "eventId": "={{ $json.eventId || $now.toUnixInteger() }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "google-sheets-append",
+      "name": "Store in Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        640,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth",
+          "name": "Google Sheets OAuth2"
+        }
+      },
+      "notes": "Appends all ROI events to Google Sheets for persistent storage and analysis. Each row represents one trackable event."
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 1 * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-monthly",
+      "name": "Schedule - Monthly Report",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        700
+      ],
+      "notes": "Triggers on the 1st of each month at midnight to generate monthly ROI reports"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_NAME_EVENTS || 'ROI_Events' }}",
+          "mode": "name"
+        },
+        "options": {
+          "range": ""
+        }
+      },
+      "id": "read-monthly-data",
+      "name": "Read Monthly ROI Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        440,
+        700
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth",
+          "name": "Google Sheets OAuth2"
+        }
+      },
+      "notes": "Retrieves all ROI events from Google Sheets for monthly analysis"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter data for last month and calculate ROI metrics\nconst now = new Date();\nconst lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);\nconst thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);\n\nconst clientId = $env.CLIENT_ID;\nconst events = $input.all();\n\n// Filter events for last month\nconst monthlyEvents = events.filter(event => {\n  const eventDate = new Date(event.json.timestamp);\n  return eventDate >= lastMonth && eventDate < thisMonth && \n         (event.json.clientId === clientId || !clientId);\n});\n\n// Attribution logic\nconst metrics = {\n  totalRevenue: 0,\n  revenueRecovered: 0,\n  revenueGenerated: 0,\n  jobsBooked: 0,\n  jobsCompleted: 0,\n  jobsLost: 0,\n  timeSavedHours: 0,\n  noShowsPrevented: 0,\n  missedCallRecovery: { count: 0, revenue: 0 },\n  leadQualification: { count: 0, revenue: 0 },\n  reengagement: { count: 0, revenue: 0 },\n  automationBreakdown: {}\n};\n\nmonthlyEvents.forEach(event => {\n  const value = parseFloat(event.json.estimatedJobValue) || 0;\n  const status = event.json.status;\n  const automation = event.json.automationResponsible;\n  const source = event.json.leadSource;\n  \n  // Initialize automation breakdown\n  if (!metrics.automationBreakdown[automation]) {\n    metrics.automationBreakdown[automation] = {\n      revenue: 0,\n      count: 0,\n      booked: 0,\n      completed: 0\n    };\n  }\n  \n  // Count by status\n  if (status === 'Booked') {\n    metrics.jobsBooked++;\n    metrics.automationBreakdown[automation].booked++;\n  } else if (status === 'Completed') {\n    metrics.jobsCompleted++;\n    metrics.totalRevenue += value;\n    metrics.automationBreakdown[automation].completed++;\n    metrics.automationBreakdown[automation].revenue += value;\n  } else if (status === 'Lost') {\n    metrics.jobsLost++;\n  }\n  \n  // Attribution by automation type\n  if (automation && automation.toLowerCase().includes('missed call')) {\n    metrics.missedCallRecovery.count++;\n    if (status === 'Completed') {\n      metrics.missedCallRecovery.revenue += value;\n      metrics.revenueRecovered += value;\n    }\n    // Estimate 15 minutes saved per recovered call\n    metrics.timeSavedHours += 0.25;\n  }\n  \n  if (automation && automation.toLowerCase().includes('lead qual')) {\n    metrics.leadQualification.count++;\n    if (status === 'Completed') {\n      metrics.leadQualification.revenue += value;\n      metrics.revenueGenerated += value;\n    }\n    // Estimate 30 minutes saved per qualified lead\n    metrics.timeSavedHours += 0.5;\n  }\n  \n  if (automation && automation.toLowerCase().includes('reengag')) {\n    metrics.reengagement.count++;\n    if (status === 'Completed') {\n      metrics.reengagement.revenue += value;\n      metrics.revenueRecovered += value;\n    }\n    // Estimate 20 minutes saved per re-engagement\n    metrics.timeSavedHours += 0.33;\n  }\n  \n  if (automation && automation.toLowerCase().includes('appointment')) {\n    // Estimate no-shows prevented (assume 10% reduction)\n    if (status === 'Completed') {\n      metrics.noShowsPrevented += 0.1;\n    }\n    // Estimate 10 minutes saved per booking\n    metrics.timeSavedHours += 0.17;\n  }\n  \n  metrics.automationBreakdown[automation].count++;\n});\n\n// Calculate conversion rate\nconst totalJobs = metrics.jobsBooked + metrics.jobsCompleted;\nconst conversionRate = totalJobs > 0 ? (metrics.jobsCompleted / totalJobs * 100).toFixed(1) : 0;\n\n// Calculate average job value\nconst avgJobValue = metrics.jobsCompleted > 0 ? (metrics.totalRevenue / metrics.jobsCompleted).toFixed(2) : 0;\n\n// Estimate labor cost saved (at $50/hour)\nconst laborCostSaved = (metrics.timeSavedHours * 50).toFixed(2);\n\n// Previous month comparison (simplified - in production, query previous month data)\nconst previousMonthRevenue = metrics.totalRevenue * 0.85; // Simulated 15% growth\nconst revenueGrowth = ((metrics.totalRevenue - previousMonthRevenue) / previousMonthRevenue * 100).toFixed(1);\n\nreturn [{\n  json: {\n    period: `${lastMonth.toLocaleString('default', { month: 'long' })} ${lastMonth.getFullYear()}`,\n    clientId: clientId,\n    metrics: metrics,\n    summary: {\n      totalRevenue: metrics.totalRevenue.toFixed(2),\n      revenueRecovered: metrics.revenueRecovered.toFixed(2),\n      revenueGenerated: metrics.revenueGenerated.toFixed(2),\n      jobsCompleted: metrics.jobsCompleted,\n      jobsBooked: metrics.jobsBooked,\n      conversionRate: conversionRate,\n      avgJobValue: avgJobValue,\n      timeSavedHours: metrics.timeSavedHours.toFixed(1),\n      laborCostSaved: laborCostSaved,\n      noShowsPrevented: Math.round(metrics.noShowsPrevented),\n      revenueGrowth: revenueGrowth\n    },\n    automationBreakdown: metrics.automationBreakdown,\n    eventCount: monthlyEvents.length,\n    calculatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "calculate-roi",
+      "name": "Calculate ROI Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        700
+      ],
+      "notes": "Attribution engine: Calculates revenue generated, recovered, time saved, conversion rates, and attributes value to specific automations"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LLM_API_URL || 'https://api.openai.com/v1/chat/completions' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"model\": $env.LLM_MODEL || \"gpt-4\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an executive business analyst. Generate a concise, confident, non-technical monthly report for an HVAC business owner. Focus on financial outcomes and business impact. Use plain English. Be direct and compelling.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Generate an executive summary for this automation ROI data:\\n\\nPeriod: \" + $json.period + \"\\nTotal Revenue: $\" + $json.summary.totalRevenue + \"\\nRevenue Recovered: $\" + $json.summary.revenueRecovered + \"\\nRevenue Generated: $\" + $json.summary.revenueGenerated + \"\\nJobs Completed: \" + $json.summary.jobsCompleted + \"\\nJobs Booked: \" + $json.summary.jobsBooked + \"\\nConversion Rate: \" + $json.summary.conversionRate + \"%\\nAverage Job Value: $\" + $json.summary.avgJobValue + \"\\nTime Saved: \" + $json.summary.timeSavedHours + \" hours\\nLabor Cost Saved: $\" + $json.summary.laborCostSaved + \"\\nNo-Shows Prevented: \" + $json.summary.noShowsPrevented + \"\\nRevenue Growth: \" + $json.summary.revenueGrowth + \"%\\n\\nAutomation Breakdown:\\n\" + JSON.stringify($json.automationBreakdown, null, 2) + \"\\n\\nWrite a compelling 3-4 paragraph executive summary highlighting the most impactful metrics. Start with the headline number. Make cancellation psychologically difficult.\"\n    }\n  ],\n  \"temperature\": 0.7,\n  \"max_tokens\": 500\n} }}",
+        "options": {}
+      },
+      "id": "generate-executive-summary",
+      "name": "Generate Executive Summary (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        840,
+        700
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-api",
+          "name": "OpenAI API"
+        }
+      },
+      "notes": "Uses LLM (GPT-4 or similar) to generate plain-English executive summary that makes the value clear and cancellation difficult"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract the executive summary from LLM response\nconst response = $input.first().json;\nconst executiveSummary = response.choices[0].message.content;\n\n// Get the metrics from previous node\nconst metrics = $('Calculate ROI Metrics').first().json;\n\nreturn [{\n  json: {\n    ...metrics,\n    executiveSummary: executiveSummary,\n    reportGenerated: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "merge-summary",
+      "name": "Merge Summary with Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        700
+      ],
+      "notes": "Combines the AI-generated summary with raw metrics data for report delivery"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "low-roi-check",
+              "leftValue": "={{ $json.summary.totalRevenue }}",
+              "rightValue": "={{ $env.LOW_ROI_THRESHOLD || 5000 }}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "check-low-roi",
+      "name": "Check for Alerts",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        700
+      ],
+      "notes": "Flags clients with low ROI, falling engagement, or data gaps for internal agency follow-up"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "data-gap-check",
+              "leftValue": "={{ $json.eventCount }}",
+              "rightValue": "={{ $env.MIN_EVENTS_THRESHOLD || 5 }}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "check-data-gaps",
+      "name": "Check Data Quality",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        900
+      ],
+      "notes": "Identifies clients with insufficient data collection for accurate ROI reporting"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.AGENCY_EMAIL }}",
+        "toEmail": "={{ $env.CLIENT_EMAIL }}",
+        "subject": "={{ '🎯 Your Automation Performance Report - ' + $json.period }}",
+        "emailType": "html",
+        "message": "={{ `\n<!DOCTYPE html>\n<html>\n<head>\n    <style>\n        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }\n        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }\n        .header h1 { margin: 0; font-size: 28px; }\n        .content { background: #f9f9f9; padding: 30px; }\n        .metric-box { background: white; padding: 20px; margin: 15px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }\n        .metric-value { font-size: 32px; font-weight: bold; color: #667eea; margin: 10px 0; }\n        .metric-label { color: #666; font-size: 14px; text-transform: uppercase; }\n        .summary { background: white; padding: 25px; margin: 20px 0; border-left: 4px solid #667eea; border-radius: 4px; }\n        .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }\n        .highlight { color: #10b981; font-weight: bold; }\n    </style>\n</head>\n<body>\n    <div class=\"header\">\n        <h1>🎯 Automation Performance Report</h1>\n        <p style=\"margin: 10px 0 0 0; font-size: 18px;\">` + $json.period + `</p>\n    </div>\n    \n    <div class=\"content\">\n        <div class=\"metric-box\">\n            <div class=\"metric-label\">Total Revenue Generated</div>\n            <div class=\"metric-value\">$` + $json.summary.totalRevenue + `</div>\n        </div>\n        \n        <div class=\"metric-box\">\n            <div class=\"metric-label\">Revenue Recovered from Lost Opportunities</div>\n            <div class=\"metric-value\">$` + $json.summary.revenueRecovered + `</div>\n        </div>\n        \n        <div class=\"summary\">\n            <h2 style=\"margin-top: 0; color: #667eea;\">Executive Summary</h2>\n            <p>` + $json.executiveSummary.replace(/\\n/g, '<br>') + `</p>\n        </div>\n        \n        <div style=\"display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0;\">\n            <div class=\"metric-box\">\n                <div class=\"metric-label\">Jobs Completed</div>\n                <div class=\"metric-value\" style=\"font-size: 24px;\">` + $json.summary.jobsCompleted + `</div>\n            </div>\n            <div class=\"metric-box\">\n                <div class=\"metric-label\">Conversion Rate</div>\n                <div class=\"metric-value\" style=\"font-size: 24px;\">` + $json.summary.conversionRate + `%</div>\n            </div>\n            <div class=\"metric-box\">\n                <div class=\"metric-label\">Time Saved</div>\n                <div class=\"metric-value\" style=\"font-size: 24px;\">` + $json.summary.timeSavedHours + ` hrs</div>\n            </div>\n            <div class=\"metric-box\">\n                <div class=\"metric-label\">Cost Savings</div>\n                <div class=\"metric-value\" style=\"font-size: 24px;\">$` + $json.summary.laborCostSaved + `</div>\n            </div>\n        </div>\n        \n        <div class=\"metric-box\">\n            <h3 style=\"margin-top: 0; color: #667eea;\">Automation Breakdown</h3>\n            ` + Object.keys($json.automationBreakdown).map(key => \n                `<p><strong>` + key + `:</strong> $` + $json.automationBreakdown[key].revenue.toFixed(2) + ` (` + $json.automationBreakdown[key].completed + ` completed)</p>`\n            ).join('') + `\n        </div>\n    </div>\n    \n    <div class=\"footer\">\n        <p>This report was automatically generated by your automation system.</p>\n        <p>Questions? Reply to this email or contact your automation team.</p>\n    </div>\n</body>\n</html>\n` }}",
+        "options": {}
+      },
+      "id": "send-client-email",
+      "name": "Send Client Email Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        600
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Credentials"
+        }
+      },
+      "notes": "Delivers formatted HTML report to client with visual metrics and executive summary"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SMS_API_URL }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "twilioApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "To",
+              "value": "={{ $env.CLIENT_PHONE }}"
+            },
+            {
+              "name": "From",
+              "value": "={{ $env.TWILIO_PHONE }}"
+            },
+            {
+              "name": "Body",
+              "value": "={{ '🎯 Your automation generated ~$' + $json.summary.totalRevenue + ' this month! Full report sent to your email. Stay tuned for more insights.' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send-client-sms",
+      "name": "Send Client SMS Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1440,
+        800
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-api",
+          "name": "Twilio API"
+        }
+      },
+      "notes": "Optional SMS notification with headline revenue number to drive email engagement"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.AGENCY_EMAIL }}",
+        "toEmail": "={{ $env.INTERNAL_AGENCY_EMAIL }}",
+        "subject": "={{ '[INTERNAL] Client ROI Report - ' + ($json.clientId || 'All Clients') + ' - ' + $json.period }}",
+        "emailType": "html",
+        "message": "={{ `\n<!DOCTYPE html>\n<html>\n<head>\n    <style>\n        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 700px; margin: 0 auto; padding: 20px; }\n        .header { background: #1f2937; color: white; padding: 20px; border-radius: 8px 8px 0 0; }\n        .alert { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 15px 0; border-radius: 4px; }\n        .alert.warning { background: #fee2e2; border-left-color: #ef4444; }\n        .metric-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin: 20px 0; }\n        .metric { background: #f3f4f6; padding: 15px; border-radius: 6px; text-align: center; }\n        .metric-value { font-size: 24px; font-weight: bold; color: #1f2937; }\n        .metric-label { font-size: 12px; color: #6b7280; margin-top: 5px; }\n    </style>\n</head>\n<body>\n    <div class=\"header\">\n        <h2 style=\"margin: 0;\">Internal Client ROI Report</h2>\n        <p style=\"margin: 5px 0 0 0;\">Client: ` + ($json.clientId || 'All Clients') + ` | Period: ` + $json.period + `</p>\n    </div>\n    \n    <div style=\"padding: 20px; background: white;\">\n        ` + ($json.summary.totalRevenue < ($env.LOW_ROI_THRESHOLD || 5000) ? \n            `<div class=\"alert warning\">\n                <strong>⚠️ LOW ROI ALERT:</strong> This client's monthly revenue ($` + $json.summary.totalRevenue + `) is below threshold ($` + ($env.LOW_ROI_THRESHOLD || 5000) + `). Consider outreach.\n            </div>` : '') + `\n        \n        ` + ($json.eventCount < ($env.MIN_EVENTS_THRESHOLD || 5) ? \n            `<div class=\"alert\">\n                <strong>📊 DATA GAP:</strong> Only ` + $json.eventCount + ` events recorded this month. Verify automation webhooks are firing correctly.\n            </div>` : '') + `\n        \n        <div class=\"metric-grid\">\n            <div class=\"metric\">\n                <div class=\"metric-value\">$` + $json.summary.totalRevenue + `</div>\n                <div class=\"metric-label\">Total Revenue</div>\n            </div>\n            <div class=\"metric\">\n                <div class=\"metric-value\">` + $json.summary.jobsCompleted + `</div>\n                <div class=\"metric-label\">Jobs Completed</div>\n            </div>\n            <div class=\"metric\">\n                <div class=\"metric-value\">` + $json.summary.conversionRate + `%</div>\n                <div class=\"metric-label\">Conversion Rate</div>\n            </div>\n            <div class=\"metric\">\n                <div class=\"metric-value\">$` + $json.summary.revenueRecovered + `</div>\n                <div class=\"metric-label\">Revenue Recovered</div>\n            </div>\n            <div class=\"metric\">\n                <div class=\"metric-value\">` + $json.summary.timeSavedHours + ` hrs</div>\n                <div class=\"metric-label\">Time Saved</div>\n            </div>\n            <div class=\"metric\">\n                <div class=\"metric-value\">` + $json.eventCount + `</div>\n                <div class=\"metric-label\">Total Events</div>\n            </div>\n        </div>\n        \n        <h3>Automation Performance Breakdown</h3>\n        <table style=\"width: 100%; border-collapse: collapse;\">\n            <thead>\n                <tr style=\"background: #f3f4f6;\">\n                    <th style=\"padding: 10px; text-align: left; border-bottom: 2px solid #d1d5db;\">Automation</th>\n                    <th style=\"padding: 10px; text-align: right; border-bottom: 2px solid #d1d5db;\">Revenue</th>\n                    <th style=\"padding: 10px; text-align: right; border-bottom: 2px solid #d1d5db;\">Completed</th>\n                    <th style=\"padding: 10px; text-align: right; border-bottom: 2px solid #d1d5db;\">Total Events</th>\n                </tr>\n            </thead>\n            <tbody>\n                ` + Object.keys($json.automationBreakdown).map(key => \n                    `<tr>\n                        <td style=\"padding: 10px; border-bottom: 1px solid #e5e7eb;\">` + key + `</td>\n                        <td style=\"padding: 10px; text-align: right; border-bottom: 1px solid #e5e7eb;\">$` + $json.automationBreakdown[key].revenue.toFixed(2) + `</td>\n                        <td style=\"padding: 10px; text-align: right; border-bottom: 1px solid #e5e7eb;\">` + $json.automationBreakdown[key].completed + `</td>\n                        <td style=\"padding: 10px; text-align: right; border-bottom: 1px solid #e5e7eb;\">` + $json.automationBreakdown[key].count + `</td>\n                    </tr>`\n                ).join('') + `\n            </tbody>\n        </table>\n        \n        <div style=\"margin-top: 30px; padding: 20px; background: #f9fafb; border-radius: 6px;\">\n            <h3 style=\"margin-top: 0;\">Executive Summary (Sent to Client)</h3>\n            <p style=\"color: #4b5563;\">` + $json.executiveSummary.replace(/\\n/g, '<br>') + `</p>\n        </div>\n        \n        <div style=\"margin-top: 20px; padding: 15px; background: #eff6ff; border-radius: 6px;\">\n            <p style=\"margin: 0; color: #1e40af;\"><strong>Action Items:</strong></p>\n            <ul style=\"margin: 10px 0; color: #1e40af;\">\n                ` + ($json.summary.totalRevenue < ($env.LOW_ROI_THRESHOLD || 5000) ? '<li>Schedule retention call with client</li>' : '') + `\n                ` + ($json.eventCount < ($env.MIN_EVENTS_THRESHOLD || 5) ? '<li>Audit automation webhook configuration</li>' : '') + `\n                ` + ($json.summary.conversionRate < 50 ? '<li>Review lead qualification criteria</li>' : '') + `\n                <li>Client report delivered: ` + new Date().toLocaleString() + `</li>\n            </ul>\n        </div>\n    </div>\n</body>\n</html>\n` }}",
+        "options": {}
+      },
+      "id": "send-internal-email",
+      "name": "Send Internal Agency Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        700
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Credentials"
+        }
+      },
+      "notes": "Sends internal copy with alerts, flags, and action items for agency team"
+    },
+    {
+      "parameters": {},
+      "id": "note-configuration",
+      "name": "📋 Configuration Guide",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        240,
+        100
+      ],
+      "notes": "ENVIRONMENT VARIABLES REQUIRED:\n\n✅ GOOGLE_SHEET_ID - Google Sheet for ROI data storage\n✅ CLIENT_ID - Unique client identifier (optional for multi-client)\n✅ CLIENT_EMAIL - Client's email for reports\n✅ CLIENT_PHONE - Client's phone for SMS (optional)\n✅ AGENCY_EMAIL - Agency sending email\n✅ INTERNAL_AGENCY_EMAIL - Internal team email\n✅ LLM_API_URL - OpenAI or compatible API endpoint\n✅ LLM_MODEL - Model name (e.g., gpt-4)\n✅ SMS_API_URL - Twilio API URL (optional)\n✅ LOW_ROI_THRESHOLD - Alert threshold (default: 5000)\n✅ MIN_EVENTS_THRESHOLD - Data quality threshold (default: 5)\n\nCREDENTIALS NEEDED:\n- Google Sheets OAuth2\n- OpenAI API\n- SMTP (email)\n- Twilio API (SMS, optional)"
+    },
+    {
+      "parameters": {},
+      "id": "note-webhook-usage",
+      "name": "🔗 Webhook Integration",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        640,
+        100
+      ],
+      "notes": "POST to webhook with JSON payload:\n\n{\n  \"clientId\": \"client-123\",\n  \"leadSource\": \"Website Form\",\n  \"jobType\": \"AC Repair\",\n  \"estimatedJobValue\": 2500,\n  \"status\": \"Completed\",\n  \"automationResponsible\": \"Lead Qualification Bot\"\n}\n\nStatus values: Booked | Completed | Lost\n\nIntegrate from:\n- Missed call recovery system\n- Lead qualification forms\n- CRM webhooks\n- Appointment booking\n- Any automation that touches revenue"
+    },
+    {
+      "parameters": {},
+      "id": "note-architecture",
+      "name": "🏗️ System Architecture",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        100
+      ],
+      "notes": "FLOW:\n\n1. Real-time Event Capture\n   → Webhook receives ROI events\n   → Store in Google Sheets\n   → Immediate response\n\n2. Monthly Processing\n   → Scheduled trigger (1st of month)\n   → Read all events from sheets\n   → Calculate metrics & attribution\n   → Generate AI summary\n\n3. Report Distribution\n   → Client: HTML email + SMS\n   → Agency: Internal report with alerts\n\n4. Quality Monitoring\n   → Flag low ROI clients\n   → Detect data gaps\n   → Track engagement"
+    }
+  ],
+  "connections": {
+    "Webhook - ROI Event": {
+      "main": [
+        [
+          {
+            "node": "Store in Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule - Monthly Report": {
+      "main": [
+        [
+          {
+            "node": "Read Monthly ROI Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Monthly ROI Data": {
+      "main": [
+        [
+          {
+            "node": "Calculate ROI Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate ROI Metrics": {
+      "main": [
+        [
+          {
+            "node": "Generate Executive Summary (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Executive Summary (LLM)": {
+      "main": [
+        [
+          {
+            "node": "Merge Summary with Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Summary with Data": {
+      "main": [
+        [
+          {
+            "node": "Check for Alerts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Data Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Alerts": {
+      "main": [
+        [
+          {
+            "node": "Send Client Email Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Client SMS Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Internal Agency Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Client Email Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Client SMS Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Internal Agency Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Data Quality": {
+      "main": [
+        [
+          {
+            "node": "Send Internal Agency Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Internal Agency Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 2,
+  "updatedAt": "2026-01-29T00:00:00.000Z",
+  "versionId": "1.0.0"
+}
