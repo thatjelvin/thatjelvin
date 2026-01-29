@@ -1,0 +1,513 @@
+{
+  "name": "HVAC Post-Service Review Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-completed",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "job-completed-webhook",
+      "name": "Job Completed Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "job-completed-trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "customer_name",
+              "name": "customerName",
+              "value": "={{ $json.body.customer_name || $json.customer_name }}",
+              "type": "string"
+            },
+            {
+              "id": "customer_phone",
+              "name": "customerPhone",
+              "value": "={{ $json.body.customer_phone || $json.customer_phone }}",
+              "type": "string"
+            },
+            {
+              "id": "customer_email",
+              "name": "customerEmail",
+              "value": "={{ $json.body.customer_email || $json.customer_email }}",
+              "type": "string"
+            },
+            {
+              "id": "job_id",
+              "name": "jobId",
+              "value": "={{ $json.body.job_id || $json.job_id }}",
+              "type": "string"
+            },
+            {
+              "id": "technician",
+              "name": "technician",
+              "value": "={{ $json.body.technician || $json.technician }}",
+              "type": "string"
+            },
+            {
+              "id": "job_type",
+              "name": "jobType",
+              "value": "={{ $json.body.job_type || $json.job_type }}",
+              "type": "string"
+            },
+            {
+              "id": "completion_time",
+              "name": "completionTime",
+              "value": "={{ $now }}",
+              "type": "string"
+            },
+            {
+              "id": "review_link",
+              "name": "reviewLink",
+              "value": "https://g.page/r/YOUR_GOOGLE_REVIEW_LINK",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-completion-data",
+      "name": "Extract Completion Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "hours"
+      },
+      "id": "wait-2-hours",
+      "name": "Wait 2 Hours",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "webhookId": "wait-2h-review"
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "={{ $('Extract Completion Data').item.json.customerPhone }}",
+        "message": "=Hi {{ $('Extract Completion Data').item.json.customerName }}! Thank you for choosing us for your {{ $('Extract Completion Data').item.json.jobType }}. We'd love your feedback! Please leave us a Google review: {{ $('Extract Completion Data').item.json.reviewLink }} - It only takes 30 seconds!",
+        "options": {}
+      },
+      "id": "initial-review-sms",
+      "name": "Request Review SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 24,
+        "unit": "hours"
+      },
+      "id": "wait-24-check",
+      "name": "Wait 24h to Check",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "webhookId": "wait-24h-check"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://your-analytics-api.com/track/click?link={{ $('Extract Completion Data').item.json.reviewLink }}&customer={{ $('Extract Completion Data').item.json.customerPhone }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "check-link-click",
+      "name": "Check if Link Clicked",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1250, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "analytics-api-key",
+          "name": "Analytics API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.clicked }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-clicked",
+      "name": "Check if Clicked",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "={{ $('Extract Completion Data').item.json.customerPhone }}",
+        "message": "=Thank you for your review, {{ $('Extract Completion Data').item.json.customerName }}! 🎉 We truly appreciate it. Know someone who needs HVAC service? Refer them and get $50 off your next service! Reply REFER for details.",
+        "options": {}
+      },
+      "id": "referral-request",
+      "name": "Ask for Referral",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [1650, 200],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 24,
+        "unit": "hours"
+      },
+      "id": "wait-48h-reminder",
+      "name": "Wait Another 24h",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1650, 400],
+      "webhookId": "wait-48h-reminder"
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "={{ $('Extract Completion Data').item.json.customerPhone }}",
+        "message": "=Hi {{ $('Extract Completion Data').item.json.customerName }}, just a gentle reminder - if you have a moment, we'd really appreciate your feedback: {{ $('Extract Completion Data').item.json.reviewLink }}. Your review helps other homeowners find quality HVAC service. Thank you!",
+        "options": {}
+      },
+      "id": "gentle-reminder",
+      "name": "Gentle Reminder SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [1850, 400],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "review-clicked",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "review-click-webhook",
+      "name": "Review Link Click Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 600],
+      "webhookId": "review-click-trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "customer_phone",
+              "name": "customerPhone",
+              "value": "={{ $json.body.customer_phone || $json.customer_phone }}",
+              "type": "string"
+            },
+            {
+              "id": "job_id",
+              "name": "jobId",
+              "value": "={{ $json.body.job_id || $json.job_id }}",
+              "type": "string"
+            },
+            {
+              "id": "clicked_at",
+              "name": "clickedAt",
+              "value": "={{ $now }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-click-data",
+      "name": "Extract Click Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [450, 600]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://your-crm-api.com/jobs/{{ $json.jobId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "review_status",
+              "value": "Clicked"
+            },
+            {
+              "name": "review_clicked_at",
+              "value": "={{ $json.clickedAt }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-review-status",
+      "name": "Update CRM Review Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "crm-api-key",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "your-google-sheet-id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Reviews",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Job_ID": "={{ $('Extract Completion Data').item.json.jobId }}",
+            "Customer_Name": "={{ $('Extract Completion Data').item.json.customerName }}",
+            "Customer_Phone": "={{ $('Extract Completion Data').item.json.customerPhone }}",
+            "Customer_Email": "={{ $('Extract Completion Data').item.json.customerEmail }}",
+            "Job_Type": "={{ $('Extract Completion Data').item.json.jobType }}",
+            "Technician": "={{ $('Extract Completion Data').item.json.technician }}",
+            "Completion_Time": "={{ $('Extract Completion Data').item.json.completionTime }}",
+            "Review_Request_Sent": "Yes",
+            "Link_Clicked": "={{ $('Check if Clicked').item.json ? 'Yes' : 'No' }}",
+            "Referral_Request_Sent": "={{ $('Ask for Referral') ? 'Yes' : 'No' }}",
+            "Reminder_Sent": "={{ $('Gentle Reminder SMS') ? 'Yes' : 'No' }}",
+            "Final_Status": "={{ $('Ask for Referral') ? 'Reviewed & Referral Requested' : $('Gentle Reminder SMS') ? 'Reminder Sent' : 'Request Sent' }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "log-review-activity",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2050, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Post-Service Review & Referral Engine\n\nAutomatically collects reviews and requests referrals after job completion.\n\n**Configuration Required:**\n1. Update Twilio credentials\n2. Update Google Review link\n3. Configure analytics API for click tracking\n4. Update CRM API endpoint & credentials\n5. Update Google Sheets document ID\n6. Configure webhooks in job completion system\n7. Set up click tracking webhook",
+        "height": 420,
+        "width": 400
+      },
+      "id": "note-4",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 40]
+    }
+  ],
+  "connections": {
+    "Job Completed Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Completion Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Completion Data": {
+      "main": [
+        [
+          {
+            "node": "Wait 2 Hours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 2 Hours": {
+      "main": [
+        [
+          {
+            "node": "Request Review SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Review SMS": {
+      "main": [
+        [
+          {
+            "node": "Wait 24h to Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 24h to Check": {
+      "main": [
+        [
+          {
+            "node": "Check if Link Clicked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Link Clicked": {
+      "main": [
+        [
+          {
+            "node": "Check if Clicked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Clicked": {
+      "main": [
+        [
+          {
+            "node": "Ask for Referral",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Another 24h",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask for Referral": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Another 24h": {
+      "main": [
+        [
+          {
+            "node": "Gentle Reminder SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gentle Reminder SMS": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Link Click Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Click Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Click Data": {
+      "main": [
+        [
+          {
+            "node": "Update CRM Review Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 2,
+  "updatedAt": "2026-01-29T15:30:00.000Z",
+  "versionId": "1"
+}

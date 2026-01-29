@@ -1,0 +1,608 @@
+{
+  "name": "HVAC Cold Lead Re-engagement",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "daily-schedule",
+      "name": "Daily Schedule (9 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://your-crm-api.com/leads?last_contact_days=90&status=open",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "fetch-dormant-leads",
+      "name": "Fetch Dormant Leads (90+ days)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "crm-api-key",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "multiplesItems",
+        "batchSize": 10
+      },
+      "id": "batch-leads",
+      "name": "Process in Batches of 10",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "lead_id",
+              "name": "leadId",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "name",
+              "name": "name",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "email",
+              "name": "email",
+              "value": "={{ $json.email }}",
+              "type": "string"
+            },
+            {
+              "id": "phone",
+              "name": "phone",
+              "value": "={{ $json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "last_contact",
+              "name": "lastContact",
+              "value": "={{ $json.last_contact_date }}",
+              "type": "string"
+            },
+            {
+              "id": "original_interest",
+              "name": "originalInterest",
+              "value": "={{ $json.interest || 'HVAC service' }}",
+              "type": "string"
+            },
+            {
+              "id": "location",
+              "name": "location",
+              "value": "={{ $json.city || 'your area' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-lead-data",
+      "name": "Extract Lead Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "model": "gpt-4",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert HVAC sales copywriter. Write a personalized, friendly re-engagement email for a cold lead. The message should:\n- Be warm and non-pushy\n- Reference their previous interest\n- Mention current seasonal relevance (heating/cooling)\n- Include a compelling reason to respond (special offer, new service, urgent reminder)\n- Be 3-4 sentences maximum\n- End with a clear call-to-action\n\nOutput ONLY the email body text, no subject line."
+            },
+            {
+              "role": "user",
+              "content": "=Write a personalized re-engagement email for:\nName: {{ $json.name }}\nOriginal Interest: {{ $json.originalInterest }}\nLocation: {{ $json.location }}\nLast Contact: {{ $json.lastContact }}\n\nCurrent month: {{ $now.toFormat('MMMM') }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "id": "ai-personalize",
+      "name": "AI Personalize Message",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiMessage = $input.item.json.choices[0].message.content;\nconst leadData = $('Extract Lead Data').item.json;\n\nreturn {\n  ...leadData,\n  personalizedMessage: aiMessage,\n  subject: `Quick Question About Your ${leadData.originalInterest}, ${leadData.name}`\n};"
+      },
+      "id": "parse-ai-response",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "sales@hvaccompany.com",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "=<p>Hi {{ $json.name }},</p><p>{{ $json.personalizedMessage }}</p><p><strong>Reply to this email or call us at (555) 123-4567.</strong></p><p>Best regards,<br>HVAC Company Sales Team</p><p style='font-size: 11px; color: #888;'>You're receiving this because you previously inquired about our services. Reply STOP to unsubscribe.</p>",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Re-engagement Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1450, 300],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('Extract Lead Data').item.json.phone }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "check-has-phone",
+      "name": "Check if Has Phone",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "={{ $('Extract Lead Data').item.json.phone }}",
+        "message": "=Hi {{ $('Extract Lead Data').item.json.name }}, it's been a while! We have special offers on {{ $('Extract Lead Data').item.json.originalInterest }} this month. Interested? Reply YES for details or call (555) 123-4567.",
+        "options": {}
+      },
+      "id": "send-sms",
+      "name": "Send Optional SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [1850, 200],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://your-crm-api.com/leads/{{ $('Extract Lead Data').item.json.leadId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "last_contact_date",
+              "value": "={{ $now }}"
+            },
+            {
+              "name": "re_engagement_sent",
+              "value": "true"
+            },
+            {
+              "name": "re_engagement_count",
+              "value": "={{ $('Extract Lead Data').item.json.re_engagement_count ? Number($('Extract Lead Data').item.json.re_engagement_count) + 1 : 1 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-crm",
+      "name": "Update CRM Contact Date",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2050, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "crm-api-key",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "no-phone-merge",
+      "name": "No Phone",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1850, 400]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-responded",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "lead-response-webhook",
+      "name": "Lead Response Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 600],
+      "webhookId": "lead-response-trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "lead_id",
+              "name": "leadId",
+              "value": "={{ $json.body.lead_id || $json.lead_id }}",
+              "type": "string"
+            },
+            {
+              "id": "response_type",
+              "name": "responseType",
+              "value": "={{ $json.body.response_type || $json.response_type }}",
+              "type": "string"
+            },
+            {
+              "id": "response_time",
+              "name": "responseTime",
+              "value": "={{ $now }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-response-data",
+      "name": "Extract Response Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [450, 600]
+    },
+    {
+      "parameters": {
+        "fromEmail": "sales@hvaccompany.com",
+        "toEmail": "sales@hvaccompany.com",
+        "subject": "=🎯 Hot Lead Response: {{ $json.leadId }}",
+        "emailType": "html",
+        "message": "=<h2 style='color: green;'>Lead Responded!</h2><p><strong>Lead ID:</strong> {{ $json.leadId }}</p><p><strong>Response Type:</strong> {{ $json.responseType }}</p><p><strong>Time:</strong> {{ $json.responseTime }}</p><p><strong>Action Required:</strong> Follow up immediately to close the deal!</p>",
+        "options": {}
+      },
+      "id": "notify-sales",
+      "name": "Notify Sales Team",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [650, 600],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://your-crm-api.com/leads/{{ $json.leadId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "stage",
+              "value": "Hot Lead - Responded"
+            },
+            {
+              "name": "responded_at",
+              "value": "={{ $json.responseTime }}"
+            },
+            {
+              "name": "response_type",
+              "value": "={{ $json.responseType }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-crm-stage",
+      "name": "Update CRM Stage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "crm-api-key",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "your-google-sheet-id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "ReEngagement",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $now }}",
+            "Lead_ID": "={{ $('Extract Lead Data').item.json.leadId }}",
+            "Name": "={{ $('Extract Lead Data').item.json.name }}",
+            "Email": "={{ $('Extract Lead Data').item.json.email }}",
+            "Phone": "={{ $('Extract Lead Data').item.json.phone }}",
+            "Original_Interest": "={{ $('Extract Lead Data').item.json.originalInterest }}",
+            "Last_Contact": "={{ $('Extract Lead Data').item.json.lastContact }}",
+            "AI_Message": "={{ $('Parse AI Response').item.json.personalizedMessage }}",
+            "Email_Sent": "Yes",
+            "SMS_Sent": "={{ $('Send Optional SMS') ? 'Yes' : 'No' }}",
+            "CRM_Updated": "Yes",
+            "Status": "Re-engagement Sent"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "log-reengagement",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2250, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Cold Lead Re-engagement System\n\nAutomatically re-engages dormant leads with AI-personalized messages.\n\n**Configuration Required:**\n1. Update schedule time (default: 9 AM daily)\n2. Configure CRM API endpoint & credentials\n3. Update OpenAI API key\n4. Update email addresses\n5. Update Twilio credentials (optional for SMS)\n6. Update Google Sheets document ID\n7. Configure response tracking webhook\n8. Adjust dormant period (default: 90 days)",
+        "height": 460,
+        "width": 400
+      },
+      "id": "note-5",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 40]
+    }
+  ],
+  "connections": {
+    "Daily Schedule (9 AM)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Dormant Leads (90+ days)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Dormant Leads (90+ days)": {
+      "main": [
+        [
+          {
+            "node": "Process in Batches of 10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process in Batches of 10": {
+      "main": [
+        [
+          {
+            "node": "Extract Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Lead Data": {
+      "main": [
+        [
+          {
+            "node": "AI Personalize Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Personalize Message": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Send Re-engagement Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Re-engagement Email": {
+      "main": [
+        [
+          {
+            "node": "Check if Has Phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Has Phone": {
+      "main": [
+        [
+          {
+            "node": "Send Optional SMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Optional SMS": {
+      "main": [
+        [
+          {
+            "node": "Update CRM Contact Date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Phone": {
+      "main": [
+        [
+          {
+            "node": "Update CRM Contact Date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update CRM Contact Date": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Response Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Response Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Response Data": {
+      "main": [
+        [
+          {
+            "node": "Notify Sales Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Sales Team": {
+      "main": [
+        [
+          {
+            "node": "Update CRM Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 2,
+  "updatedAt": "2026-01-29T15:30:00.000Z",
+  "versionId": "1"
+}

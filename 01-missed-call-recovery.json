@@ -1,0 +1,383 @@
+{
+  "name": "HVAC Missed Call Recovery",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "missed-call",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Missed Call Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "missed-call-trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "caller_phone",
+              "name": "callerPhone",
+              "value": "={{ $json.body.caller_phone || $json.caller_phone }}",
+              "type": "string"
+            },
+            {
+              "id": "call_time",
+              "name": "callTime",
+              "value": "={{ $json.body.call_time || $json.call_time || $now }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-data",
+      "name": "Extract Call Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "={{ $json.callerPhone }}",
+        "message": "Sorry we missed your call — how can we help you today?",
+        "options": {}
+      },
+      "id": "immediate-sms",
+      "name": "Send Immediate SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 10,
+        "unit": "minutes"
+      },
+      "id": "wait-10-min",
+      "name": "Wait 10 Minutes",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "webhookId": "wait-10-min"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('Missed Call Webhook').item.json.body.customer_replied || 'false' }}",
+              "operation": "notEqual",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "check-reply-1",
+      "name": "Check Reply 10min",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "={{ $('Extract Call Data').item.json.callerPhone }}",
+        "message": "Hi, this is [HVAC Company]. We tried reaching you earlier. Is your heating/cooling system working properly? Reply YES if you need service.",
+        "options": {}
+      },
+      "id": "followup-sms-10",
+      "name": "Send Follow-up SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [1250, 200],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "minutes"
+      },
+      "id": "wait-30-min",
+      "name": "Wait 30 Minutes",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1450, 200],
+      "webhookId": "wait-30-min"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('Missed Call Webhook').item.json.body.customer_replied || 'false' }}",
+              "operation": "notEqual",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "check-reply-2",
+      "name": "Check Reply 30min",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1650, 200]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@hvaccompany.com",
+        "toEmail": "manager@hvaccompany.com",
+        "subject": "URGENT: Missed Call - No Response",
+        "emailType": "html",
+        "message": "<h2>Missed Call Alert</h2><p><strong>Caller:</strong> {{ $('Extract Call Data').item.json.callerPhone }}</p><p><strong>Call Time:</strong> {{ $('Extract Call Data').item.json.callTime }}</p><p><strong>Status:</strong> Customer has not responded to SMS follow-ups after 40 minutes</p><p>Please follow up immediately by phone.</p>",
+        "options": {}
+      },
+      "id": "email-manager",
+      "name": "Email Office Manager",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1850, 100],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "your-google-sheet-id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now }}",
+            "Caller_Phone": "={{ $('Extract Call Data').item.json.callerPhone }}",
+            "Call_Time": "={{ $('Extract Call Data').item.json.callTime }}",
+            "SMS_Sent": "Yes",
+            "Follow_up_Sent": "={{ $('Check Reply 10min').item.json ? 'Yes' : 'No' }}",
+            "Email_Sent": "={{ $('Check Reply 30min').item.json ? 'Yes' : 'No' }}",
+            "Status": "={{ $('Check Reply 30min').item.json ? 'No Response - Manager Notified' : 'In Progress' }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "log-to-sheets",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2050, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "no-action-needed",
+      "name": "No Action Needed",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {},
+      "id": "replied-30",
+      "name": "Customer Replied",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "content": "## Missed Call Recovery Workflow\n\nThis automation handles missed calls with immediate SMS follow-up and escalation.\n\n**Configuration Required:**\n1. Update Twilio credentials\n2. Update Google Sheets document ID\n3. Update email addresses\n4. Configure webhook URL in phone system",
+        "height": 360,
+        "width": 380
+      },
+      "id": "note-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 80]
+    }
+  ],
+  "connections": {
+    "Missed Call Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Call Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Call Data": {
+      "main": [
+        [
+          {
+            "node": "Send Immediate SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Immediate SMS": {
+      "main": [
+        [
+          {
+            "node": "Wait 10 Minutes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 10 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Check Reply 10min",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Reply 10min": {
+      "main": [
+        [
+          {
+            "node": "Send Follow-up SMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Action Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Follow-up SMS": {
+      "main": [
+        [
+          {
+            "node": "Wait 30 Minutes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Check Reply 30min",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Reply 30min": {
+      "main": [
+        [
+          {
+            "node": "Email Office Manager",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Customer Replied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Office Manager": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Action Needed": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customer Replied": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-01-29T15:30:00.000Z",
+  "versionId": "1"
+}

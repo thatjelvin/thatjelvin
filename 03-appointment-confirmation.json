@@ -1,0 +1,568 @@
+{
+  "name": "HVAC Appointment Confirmation System",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-scheduled",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "job-scheduled-webhook",
+      "name": "Job Scheduled Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "job-scheduled-trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "customer_name",
+              "name": "customerName",
+              "value": "={{ $json.body.customer_name || $json.customer_name }}",
+              "type": "string"
+            },
+            {
+              "id": "customer_phone",
+              "name": "customerPhone",
+              "value": "={{ $json.body.customer_phone || $json.customer_phone }}",
+              "type": "string"
+            },
+            {
+              "id": "customer_email",
+              "name": "customerEmail",
+              "value": "={{ $json.body.customer_email || $json.customer_email }}",
+              "type": "string"
+            },
+            {
+              "id": "appointment_date",
+              "name": "appointmentDate",
+              "value": "={{ $json.body.appointment_date || $json.appointment_date }}",
+              "type": "string"
+            },
+            {
+              "id": "appointment_time",
+              "name": "appointmentTime",
+              "value": "={{ $json.body.appointment_time || $json.appointment_time }}",
+              "type": "string"
+            },
+            {
+              "id": "job_type",
+              "name": "jobType",
+              "value": "={{ $json.body.job_type || $json.job_type }}",
+              "type": "string"
+            },
+            {
+              "id": "technician",
+              "name": "technician",
+              "value": "={{ $json.body.technician || $json.technician }}",
+              "type": "string"
+            },
+            {
+              "id": "job_id",
+              "name": "jobId",
+              "value": "={{ $json.body.job_id || $json.job_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-job-data",
+      "name": "Extract Job Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "={{ $json.customerPhone }}",
+        "message": "=Hi {{ $json.customerName }}, your HVAC {{ $json.jobType }} is scheduled for {{ $json.appointmentDate }} at {{ $json.appointmentTime }}. Technician: {{ $json.technician }}. Reply CANCEL to cancel or CONFIRM to confirm. Job ID: {{ $json.jobId }}",
+        "options": {}
+      },
+      "id": "immediate-confirmation",
+      "name": "Send Immediate Confirmation",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const appointmentDateTime = new Date($json.appointmentDate + ' ' + $json.appointmentTime);\nconst now = new Date();\nconst timeDiff = appointmentDateTime - now;\nconst hours24 = 24 * 60 * 60 * 1000;\n\nif (timeDiff > hours24) {\n  const wait24Hours = timeDiff - hours24;\n  return {\n    ...items[0].json,\n    waitTime: wait24Hours,\n    shouldWait: true\n  };\n} else {\n  return {\n    ...items[0].json,\n    waitTime: 0,\n    shouldWait: false\n  };\n}"
+      },
+      "id": "calculate-wait",
+      "name": "Calculate Wait Time",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.shouldWait }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-wait-needed",
+      "name": "Check if Wait Needed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "unit": "ms",
+        "amount": "={{ $json.waitTime }}"
+      },
+      "id": "wait-24h",
+      "name": "Wait Until 24h Before",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1250, 200],
+      "webhookId": "wait-24h-before"
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "={{ $('Extract Job Data').item.json.customerPhone }}",
+        "message": "=Reminder: Your HVAC appointment is tomorrow, {{ $('Extract Job Data').item.json.appointmentDate }} at {{ $('Extract Job Data').item.json.appointmentTime }}. We'll see you then! Reply CANCEL to cancel. Job: {{ $('Extract Job Data').item.json.jobId }}",
+        "options": {}
+      },
+      "id": "reminder-24h-sms",
+      "name": "24h Reminder SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [1650, 250],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "appointments@hvaccompany.com",
+        "toEmail": "={{ $('Extract Job Data').item.json.customerEmail }}",
+        "subject": "=Appointment Reminder - {{ $('Extract Job Data').item.json.appointmentDate }}",
+        "emailType": "html",
+        "message": "=<h2>HVAC Appointment Reminder</h2><p>Hi {{ $('Extract Job Data').item.json.customerName }},</p><p>This is a reminder that your <strong>{{ $('Extract Job Data').item.json.jobType }}</strong> appointment is scheduled for:</p><p><strong>Date:</strong> {{ $('Extract Job Data').item.json.appointmentDate }}<br><strong>Time:</strong> {{ $('Extract Job Data').item.json.appointmentTime }}<br><strong>Technician:</strong> {{ $('Extract Job Data').item.json.technician }}</p><p><strong>Need to cancel or reschedule?</strong><br>Reply CANCEL to (555) 123-4567 or call us at (555) 123-4567.</p><p>We look forward to serving you!</p><p>Job ID: {{ $('Extract Job Data').item.json.jobId }}</p>",
+        "options": {}
+      },
+      "id": "reminder-24h-email",
+      "name": "24h Reminder Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1850, 250],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 22,
+        "unit": "hours"
+      },
+      "id": "wait-2h-before",
+      "name": "Wait Until 2h Before",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [2050, 250],
+      "webhookId": "wait-2h-before"
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "accountSid": "={{ $credentials.twilioAccountSid }}",
+        "from": "={{ $credentials.twilioPhoneNumber }}",
+        "to": "={{ $('Extract Job Data').item.json.customerPhone }}",
+        "message": "=Final reminder: Your HVAC technician will arrive in 2 hours ({{ $('Extract Job Data').item.json.appointmentTime }}). Please ensure someone is home. Reply CANCEL if needed. Job: {{ $('Extract Job Data').item.json.jobId }}",
+        "options": {}
+      },
+      "id": "final-reminder",
+      "name": "2h Final Reminder SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [2250, 250],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "no-wait-merge",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [1450, 350]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "customer-reply",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "customer-reply-webhook",
+      "name": "Customer Reply Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 550],
+      "webhookId": "customer-reply-trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.message || $json.message }}",
+              "operation": "contains",
+              "value2": "CANCEL"
+            }
+          ]
+        }
+      },
+      "id": "check-cancel",
+      "name": "Check if Cancel",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 550]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://your-crm-api.com/jobs/{{ $json.body.job_id || $json.job_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "Cancelled"
+            },
+            {
+              "name": "cancelled_by",
+              "value": "Customer"
+            },
+            {
+              "name": "cancelled_at",
+              "value": "={{ $now }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-crm-cancel",
+      "name": "Update CRM - Cancelled",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 450],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "crm-api-key",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "dispatch@hvaccompany.com",
+        "toEmail": "dispatcher@hvaccompany.com",
+        "subject": "=CANCELLED: Job {{ $json.body.job_id || $json.job_id }}",
+        "emailType": "html",
+        "message": "=<h2 style='color: orange;'>Appointment Cancelled</h2><p><strong>Job ID:</strong> {{ $json.body.job_id || $json.job_id }}</p><p><strong>Customer:</strong> Replied with CANCEL</p><p><strong>Cancelled At:</strong> {{ $now }}</p><p>Please update dispatcher schedule.</p>",
+        "options": {}
+      },
+      "id": "notify-dispatcher",
+      "name": "Notify Dispatcher",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [850, 450],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "your-google-sheet-id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Appointments",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now }}",
+            "Job_ID": "={{ $('Extract Job Data').item.json.jobId }}",
+            "Customer_Name": "={{ $('Extract Job Data').item.json.customerName }}",
+            "Customer_Phone": "={{ $('Extract Job Data').item.json.customerPhone }}",
+            "Appointment_Date": "={{ $('Extract Job Data').item.json.appointmentDate }}",
+            "Appointment_Time": "={{ $('Extract Job Data').item.json.appointmentTime }}",
+            "Job_Type": "={{ $('Extract Job Data').item.json.jobType }}",
+            "Technician": "={{ $('Extract Job Data').item.json.technician }}",
+            "Immediate_Confirmation": "Sent",
+            "24h_Reminder": "={{ $('24h Reminder SMS') ? 'Sent' : 'Pending' }}",
+            "2h_Reminder": "={{ $('2h Final Reminder SMS') ? 'Sent' : 'Pending' }}",
+            "Status": "Scheduled"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "log-appointment",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2450, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "no-cancel",
+      "name": "Not a Cancellation",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [650, 650]
+    },
+    {
+      "parameters": {
+        "content": "## Appointment Confirmation System\n\nAutomatically sends confirmation and reminder messages to prevent no-shows.\n\n**Configuration Required:**\n1. Update Twilio credentials\n2. Update email addresses\n3. Configure CRM API endpoint & credentials\n4. Update Google Sheets document ID\n5. Configure webhooks in scheduling system\n6. Set up customer reply webhook for cancellations",
+        "height": 400,
+        "width": 400
+      },
+      "id": "note-3",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 40]
+    }
+  ],
+  "connections": {
+    "Job Scheduled Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Job Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Job Data": {
+      "main": [
+        [
+          {
+            "node": "Send Immediate Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Immediate Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Calculate Wait Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Wait Time": {
+      "main": [
+        [
+          {
+            "node": "Check if Wait Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Wait Needed": {
+      "main": [
+        [
+          {
+            "node": "Wait Until 24h Before",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait Until 24h Before": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "24h Reminder SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "24h Reminder SMS": {
+      "main": [
+        [
+          {
+            "node": "24h Reminder Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "24h Reminder Email": {
+      "main": [
+        [
+          {
+            "node": "Wait Until 2h Before",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Until 2h Before": {
+      "main": [
+        [
+          {
+            "node": "2h Final Reminder SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2h Final Reminder SMS": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customer Reply Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check if Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Cancel": {
+      "main": [
+        [
+          {
+            "node": "Update CRM - Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not a Cancellation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update CRM - Cancelled": {
+      "main": [
+        [
+          {
+            "node": "Notify Dispatcher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 2,
+  "updatedAt": "2026-01-29T15:30:00.000Z",
+  "versionId": "1"
+}
